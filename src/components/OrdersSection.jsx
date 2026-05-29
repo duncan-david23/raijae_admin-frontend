@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Search, Package, CheckCircle, Clock, Truck,
@@ -6,21 +6,24 @@ import {
   X, RefreshCw, Download, Printer, User, Phone,
   MapPin, Calendar, Hash, ShoppingBag, Eye,
   TrendingUp, AlertCircle,
+  Mail, CreditCard
 } from 'lucide-react'
-import { sampleOrders } from '../data/orders'
+import axios from 'axios'
+import { supabase } from '../lib/supabaseClient'
+
+const API_BASE_URL = 'http://172.20.10.3:5000/api/users'
 
 /* ── status config ── */
 const STATUS = {
-  Pending:       { color: '#f59e0b', bg: 'rgba(245,158,11,0.1)',   border: 'rgba(245,158,11,0.25)',  icon: Clock },
-  Processing:    { color: '#60a5fa', bg: 'rgba(96,165,250,0.1)',   border: 'rgba(96,165,250,0.25)',  icon: Package },
-  Shipped:       { color: '#c084fc', bg: 'rgba(192,132,252,0.1)', border: 'rgba(192,132,252,0.25)', icon: Truck },
-  Delivered:     { color: '#4ade80', bg: 'rgba(74,222,128,0.1)',   border: 'rgba(74,222,128,0.25)',  icon: CheckCircle },
-  Cancelled:     { color: '#f87171', bg: 'rgba(248,113,113,0.1)',  border: 'rgba(248,113,113,0.25)', icon: XCircle },
+  pending:       { color: '#f59e0b', bg: 'rgba(245,158,11,0.1)',   border: 'rgba(245,158,11,0.25)',  icon: Clock, label: 'Pending' },
+  processing:    { color: '#60a5fa', bg: 'rgba(96,165,250,0.1)',   border: 'rgba(96,165,250,0.25)',  icon: Package, label: 'Processing' },
+  out_for_delivery: { color: '#c084fc', bg: 'rgba(192,132,252,0.1)', border: 'rgba(192,132,252,0.25)', icon: Truck, label: 'Out for Delivery' },
+  delivered:     { color: '#4ade80', bg: 'rgba(74,222,128,0.1)',   border: 'rgba(74,222,128,0.25)',  icon: CheckCircle, label: 'Delivered' },
+  cancelled:     { color: '#f87171', bg: 'rgba(248,113,113,0.1)',  border: 'rgba(248,113,113,0.25)', icon: XCircle, label: 'Cancelled' },
 }
 const STATUS_KEYS = Object.keys(STATUS)
 
-const cfg = (s) => STATUS[s] || { color: '#888', bg: 'rgba(136,136,136,0.1)', border: 'rgba(136,136,136,0.2)', icon: Clock }
-
+const cfg = (s) => STATUS[s?.toLowerCase()] || STATUS.pending
 const fmt = (n) => `GHC ${Number(n).toFixed(2)}`
 const fmtDate = (d) => {
   try { return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) }
@@ -35,32 +38,151 @@ const SORTS = [
 ]
 
 export default function OrdersSection() {
-  const [orders, setOrders]       = useState(sampleOrders)
+  const [orders, setOrders]       = useState([])
+  const [loading, setLoading]     = useState(true)
+  const [error, setError]         = useState(null)
   const [search,  setSearch]      = useState('')
   const [statusF, setStatusF]     = useState('All')
   const [sort,    setSort]        = useState('newest')
   const [expanded, setExpanded]   = useState(null)
   const [editing,  setEditing]    = useState(null)
   const [draft,    setDraft]      = useState('')
+  const [updating, setUpdating]   = useState(false)
+
+  /* ── fetch orders from API ── */
+  const fetchOrders = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        setError('Please log in to view orders')
+        setLoading(false)
+        return
+      }
+
+      const response = await axios.get(
+        `${API_BASE_URL}/admin/orders`,
+        {
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+          }
+        }
+      )
+      
+
+      if (response.data.orders && Array.isArray(response.data.orders)) {
+        // Transform API data to match component structure
+        const transformedOrders = response.data.orders.map(order => ({
+          id: order.id,
+          orderNumber: order.order_id,
+          orderDate: order.created_at,
+          customerName: order.customer_name,
+          customerPhone: order.customer_phone,
+          customerEmail: order.customer_email,
+          customerAddress: order.customer_address,
+          totalAmount: order.order_total,
+          status: order.status?.toLowerCase() || 'pending',
+          paymentMethod: order.payment_method,
+          orderDetails: order.items?.map(item => ({
+            id: item.product_id,
+            item: item.product_name,
+            quantity: item.quantity,
+            price: item.price,
+            subtotal: item.subtotal,
+            color: item.color,
+            image: item.image
+          })) || []
+        }))
+        setOrders(transformedOrders)
+      }
+    
+    } catch (err) {
+      console.error("Error fetching orders:", err)
+      setError(err.response?.data?.error || "Failed to load orders")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchOrders()
+  }, [])
+
+  /* ── update status in backend ── */
+  const updateOrderStatus = async (orderId, newStatus) => {
+    try {
+      setUpdating(true)
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        console.error('No session found')
+        return false
+      }
+
+      const response = await axios.put(
+        `${API_BASE_URL}/update-order-status/${orderId}`,
+        { status: newStatus },
+        {
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      )
+      
+    
+      return true
+    } catch (err) {
+      console.error('Error updating order status:', err)
+      return false
+    } finally {
+      setUpdating(false)
+    }
+  }
+
+  /* ── save status (both local + backend) ── */
+  const saveStatus = async (id) => {
+    if (!draft) return
+    
+    // Update locally first for instant UI feedback
+    setOrders(prev => prev.map(o => o.id === id ? { ...o, status: draft.toLowerCase() } : o))
+    setEditing(null)
+    setDraft('')
+    
+    // Update in backend
+    await updateOrderStatus(id, draft.toLowerCase())
+  }
+
+  /* ── quick status actions ── */
+  const quickStatusUpdate = async (orderId, newStatus) => {
+    console.log(`Quick update: Order ${orderId} -> ${newStatus}`)
+    
+    // Update locally
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus.toLowerCase() } : o))
+    
+    // Update in backend
+    await updateOrderStatus(orderId, newStatus.toLowerCase())
+  }
 
   /* ── stats ── */
   const stats = useMemo(() => ({
     total:     orders.length,
-    pending:   orders.filter(o => o.status === 'Pending').length,
-    delivered: orders.filter(o => o.status === 'Delivered').length,
+    pending:   orders.filter(o => o.status === 'pending').length,
+    delivered: orders.filter(o => o.status === 'delivered').length,
     revenue:   orders.reduce((s, o) => s + o.totalAmount, 0),
   }), [orders])
 
   /* ── filter + sort ── */
   const filtered = useMemo(() => {
     let r = [...orders]
-    if (statusF !== 'All') r = r.filter(o => o.status === statusF)
+    if (statusF !== 'All') r = r.filter(o => o.status === statusF.toLowerCase())
     if (search.trim()) {
       const q = search.toLowerCase()
       r = r.filter(o =>
         o.orderNumber.toLowerCase().includes(q) ||
         o.customerName.toLowerCase().includes(q) ||
-        o.customerPhone.includes(q)
+        o.customerPhone?.includes(q) ||
+        o.customerEmail?.toLowerCase().includes(q)
       )
     }
     if (sort === 'oldest')   r.sort((a, b) => new Date(a.orderDate) - new Date(b.orderDate))
@@ -70,27 +192,47 @@ export default function OrdersSection() {
     return r
   }, [orders, statusF, search, sort])
 
-  /* ── update status ── */
-  const saveStatus = (id) => {
-    if (!draft) return
-    setOrders(prev => prev.map(o => o.id === id ? { ...o, status: draft } : o))
-    setEditing(null); setDraft('')
-  }
-
   /* ── export CSV ── */
   const exportCSV = () => {
     const rows = [
-      ['Order #', 'Customer', 'Phone', 'Date', 'Items', 'Total', 'Status'],
+      ['Order #', 'Customer', 'Phone', 'Email', 'Date', 'Items', 'Total', 'Status', 'Payment Method'],
       ...filtered.map(o => [
-        o.orderNumber, o.customerName, o.customerPhone,
-        o.orderDate, o.orderDetails.length, o.totalAmount, o.status
+        o.orderNumber, o.customerName, o.customerPhone, o.customerEmail || '',
+        fmtDate(o.orderDate), o.orderDetails.length, o.totalAmount, o.status, o.paymentMethod || ''
       ])
     ]
     const csv = rows.map(r => r.join(',')).join('\n')
     const a = document.createElement('a')
     a.href = 'data:text/csv,' + encodeURIComponent(csv)
-    a.download = 'raijam_orders.csv'
+    a.download = `raijam_orders_${new Date().toISOString().slice(0,10)}.csv`
     a.click()
+  }
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-96">
+        <div className="text-center">
+          <div className="w-10 h-10 border-2 border-gray-200 border-t-gray-600 rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-400 text-sm">Loading orders...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="adm-empty">
+        <div className="adm-empty-icon"><AlertCircle size={20} /></div>
+        <p className="adm-empty-title">Error loading orders</p>
+        <p className="adm-empty-sub">{error}</p>
+        <button 
+          onClick={fetchOrders}
+          className="mt-4 px-4 py-2 bg-gray-800 text-white rounded-lg text-sm"
+        >
+          Try Again
+        </button>
+      </div>
+    )
   }
 
   return (
@@ -123,7 +265,6 @@ export default function OrdersSection() {
         }
         @media(max-width:640px){ .adm { padding: 20px 16px 60px; } }
 
-        /* ── HEADER ── */
         .adm-header {
           display: flex; align-items: flex-start;
           justify-content: space-between; gap: 16px;
@@ -156,7 +297,6 @@ export default function OrdersSection() {
         }
         .adm-btn-ghost:hover { border-color: var(--faint); color: var(--text); background: var(--raised); }
 
-        /* ── STAT CARDS ── */
         .adm-stats {
           display: grid;
           grid-template-columns: repeat(4, 1fr);
@@ -186,7 +326,6 @@ export default function OrdersSection() {
         }
         .stat-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
 
-        /* ── TOOLBAR ── */
         .adm-toolbar {
           background: var(--surface);
           border: 1px solid var(--line);
@@ -239,7 +378,6 @@ export default function OrdersSection() {
         }
         .adm-sort:focus { border-color: var(--line2); }
 
-        /* ── RESULTS COUNT ── */
         .adm-count {
           font-family: 'DM Mono', monospace;
           font-size: 10.5px; color: var(--faint);
@@ -247,7 +385,6 @@ export default function OrdersSection() {
           margin-bottom: 10px; padding-left: 2px;
         }
 
-        /* ── ORDER CARD ── */
         .ord-card {
           background: var(--surface);
           border: 1px solid var(--line);
@@ -308,7 +445,6 @@ export default function OrdersSection() {
         }
         .ord-icon-btn:hover { border-color: var(--line2); color: var(--text); background: var(--raised); }
 
-        /* status editor */
         .ord-edit-row {
           display: flex; align-items: center; gap: 6px;
           margin-top: 6px; flex-wrap: wrap;
@@ -335,13 +471,9 @@ export default function OrdersSection() {
         }
         .ord-cancel-btn:hover { border-color: #f87171; color: #f87171; }
 
-        /* ── EXPANDED ── */
-        .ord-expanded {
-          border-top: 1px solid var(--line);
-        }
+        .ord-expanded { border-top: 1px solid var(--line); }
         .ord-expanded-inner { padding: 20px 18px; }
 
-        /* customer info grid */
         .ord-info-grid {
           display: grid; grid-template-columns: 1fr 1fr;
           gap: 10px; margin-bottom: 20px;
@@ -364,7 +496,6 @@ export default function OrdersSection() {
         .ord-info-row svg { color: var(--faint); flex-shrink: 0; margin-top: 1px; }
         .ord-info-row:last-child { margin-bottom: 0; }
 
-        /* items section */
         .ord-items-label {
           font-family: 'DM Mono', monospace; font-size: 9.5px;
           text-transform: uppercase; letter-spacing: 0.1em;
@@ -413,7 +544,6 @@ export default function OrdersSection() {
           font-size: 9.5px; color: var(--faint); margin-top: 2px;
         }
 
-        /* order total row */
         .ord-total-row {
           display: flex; align-items: center; justify-content: flex-end;
           gap: 12px; margin-top: 14px; padding-top: 14px;
@@ -428,7 +558,6 @@ export default function OrdersSection() {
           font-size: 20px; font-weight: 700; color: var(--white);
         }
 
-        /* quick action buttons */
         .ord-action-row {
           display: flex; flex-wrap: wrap; gap: 8px;
           margin-top: 16px; padding-top: 14px;
@@ -452,7 +581,6 @@ export default function OrdersSection() {
         .abtn-red    { background: rgba(248,113,113,0.1); color: #f87171; border-color: rgba(248,113,113,0.25); }
         .abtn-red:hover    { background: rgba(248,113,113,0.18); }
 
-        /* ── EMPTY STATE ── */
         .adm-empty {
           text-align: center; padding: 72px 20px;
           background: var(--surface); border: 1px solid var(--line);
@@ -470,15 +598,12 @@ export default function OrdersSection() {
         }
         .adm-empty-sub { font-size: 12.5px; color: var(--muted); }
 
-        /* scrollbar */
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 10px; }
       `}</style>
 
       <div className="adm">
-
-        {/* ══ HEADER ══ */}
         <div className="adm-header">
           <div>
             <h1 className="adm-title">Orders</h1>
@@ -491,10 +616,12 @@ export default function OrdersSection() {
             <button className="adm-btn adm-btn-ghost" onClick={exportCSV}>
               <Download size={13} /> Export CSV
             </button>
+            <button className="adm-btn adm-btn-ghost" onClick={fetchOrders}>
+              <RefreshCw size={13} /> Refresh
+            </button>
           </div>
         </div>
 
-        {/* ══ STAT CARDS ══ */}
         <div className="adm-stats">
           {[
             { label: 'Total Orders',   val: stats.total,     sub: 'All time',        icon: ShoppingBag, color: '#888' },
@@ -520,27 +647,27 @@ export default function OrdersSection() {
           ))}
         </div>
 
-        {/* ══ TOOLBAR ══ */}
         <div className="adm-toolbar">
           <div className="adm-search-wrap">
             <Search size={14} className="adm-search-icon" />
             <input
               className="adm-search"
-              placeholder="Search by order number, customer name or phone…"
+              placeholder="Search by order number, customer name, email or phone…"
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
           </div>
           <div className="adm-filter-row">
-            {['All', ...STATUS_KEYS].map(s => {
-              const c = STATUS[s]
+            {['All', ...STATUS_KEYS.map(s => s.charAt(0).toUpperCase() + s.slice(1))].map(s => {
+              const statusKey = s === 'All' ? 'All' : s.toLowerCase()
+              const statusConfig = STATUS[statusKey]
               return (
                 <button
                   key={s}
                   className={`adm-status-pill${statusF === s ? ' on' : ''}`}
                   onClick={() => setStatusF(s)}
                 >
-                  {c && <span className="adm-status-dot" style={{ background: c.color }} />}
+                  {statusConfig && <span className="adm-status-dot" style={{ background: statusConfig.color }} />}
                   {s}
                 </button>
               )
@@ -555,10 +682,8 @@ export default function OrdersSection() {
           </div>
         </div>
 
-        {/* results */}
         <p className="adm-count">{filtered.length} result{filtered.length !== 1 ? 's' : ''}</p>
 
-        {/* ══ ORDER LIST ══ */}
         {filtered.length === 0 ? (
           <div className="adm-empty">
             <div className="adm-empty-icon"><Package size={20} /></div>
@@ -581,7 +706,6 @@ export default function OrdersSection() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.3, delay: idx * 0.04 }}
                 >
-                  {/* ── CARD HEADER ── */}
                   <div className="ord-head" onClick={() => setExpanded(isExp ? null : order.id)}>
                     <div className="ord-left">
                       <div className="ord-top-row">
@@ -590,7 +714,7 @@ export default function OrdersSection() {
                           className="ord-chip"
                           style={{ background: c.bg, color: c.color, borderColor: c.border }}
                         >
-                          <Icon size={9} /> {order.status}
+                          <Icon size={9} /> {c.label}
                         </span>
                       </div>
 
@@ -602,7 +726,6 @@ export default function OrdersSection() {
                         <span className="ord-amount">{fmt(order.totalAmount)}</span>
                       </div>
 
-                      {/* Status editor */}
                       {isEdit && (
                         <div className="ord-edit-row" onClick={e => e.stopPropagation()}>
                           <select
@@ -611,9 +734,9 @@ export default function OrdersSection() {
                             onChange={e => setDraft(e.target.value)}
                           >
                             <option value="">Select status…</option>
-                            {STATUS_KEYS.map(s => <option key={s} value={s}>{s}</option>)}
+                            {STATUS_KEYS.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
                           </select>
-                          <button className="ord-save-btn" disabled={!draft} onClick={() => saveStatus(order.id)}>
+                          <button className="ord-save-btn" disabled={!draft || updating} onClick={() => saveStatus(order.id)}>
                             <Save size={12} />
                           </button>
                           <button className="ord-cancel-btn" onClick={() => { setEditing(null); setDraft('') }}>
@@ -637,11 +760,9 @@ export default function OrdersSection() {
                     </div>
                   </div>
 
-                  {/* ── EXPANDED DETAILS ── */}
                   <AnimatePresence>
                     {isExp && (
                       <motion.div
-                        key="expanded"
                         className="ord-expanded"
                         initial={{ height: 0, opacity: 0 }}
                         animate={{ height: 'auto', opacity: 1 }}
@@ -650,13 +771,13 @@ export default function OrdersSection() {
                         style={{ overflow: 'hidden' }}
                       >
                         <div className="ord-expanded-inner">
-
-                          {/* Customer + address */}
                           <div className="ord-info-grid">
                             <div className="ord-info-box">
                               <div className="ord-info-title"><User size={10} /> Customer Details</div>
                               <div className="ord-info-row"><User size={11} /><span style={{ color: 'var(--text)' }}>{order.customerName}</span></div>
                               <div className="ord-info-row"><Phone size={11} /><span>{order.customerPhone}</span></div>
+                              <div className="ord-info-row"><Mail size={11} /><span>{order.customerEmail || 'N/A'}</span></div>
+                              <div className="ord-info-row"><CreditCard size={11} /><span className="capitalize">{order.paymentMethod || 'N/A'}</span></div>
                             </div>
                             <div className="ord-info-box">
                               <div className="ord-info-title"><MapPin size={10} /> Delivery Address</div>
@@ -664,10 +785,7 @@ export default function OrdersSection() {
                             </div>
                           </div>
 
-                          {/* Items */}
-                          <div className="ord-items-label">
-                            Order Items ({order.orderDetails.length})
-                          </div>
+                          <div className="ord-items-label">Order Items ({order.orderDetails.length})</div>
 
                           {order.orderDetails.map((item, i) => (
                             <div key={i} className="ord-item-row">
@@ -680,18 +798,11 @@ export default function OrdersSection() {
                               <div style={{ flex: 1, minWidth: 0 }}>
                                 <div className="ord-item-name">{item.item}</div>
                                 <div className="ord-item-meta">
-                                  <span className="ord-item-meta-tag">
-                                    <Hash size={9} /> Qty: {item.quantity}
-                                  </span>
-                                  <span className="ord-item-meta-tag">
-                                    {fmt(item.price)} each
-                                  </span>
+                                  <span className="ord-item-meta-tag"><Hash size={9} /> Qty: {item.quantity}</span>
+                                  <span className="ord-item-meta-tag">{fmt(item.price)} each</span>
                                   {item.color && (
                                     <span className="ord-item-meta-tag">
-                                      <span
-                                        className="ord-color-swatch"
-                                        style={{ background: item.color }}
-                                      />
+                                      <span className="ord-color-swatch" style={{ background: item.color }} />
                                       {item.color}
                                     </span>
                                   )}
@@ -704,44 +815,42 @@ export default function OrdersSection() {
                             </div>
                           ))}
 
-                          {/* Total */}
                           <div className="ord-total-row">
                             <span className="ord-total-label">Order Total</span>
                             <span className="ord-total-val">{fmt(order.totalAmount)}</span>
                           </div>
 
-                          {/* Quick action buttons */}
                           <div className="ord-action-row">
-                            {order.status === 'Pending' && (
+                            {order.status === 'pending' && (
                               <button
                                 className="ord-action-btn abtn-blue"
-                                onClick={() => setOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: 'Processing' } : o))}
+                                onClick={() => quickStatusUpdate(order.id, 'processing')}
                               >
                                 <Package size={12} /> Mark Processing
                               </button>
                             )}
-                            {(order.status === 'Pending' || order.status === 'Processing') && (
+                            {(order.status === 'pending' || order.status === 'processing') && (
                               <button
                                 className="ord-action-btn abtn-purple"
-                                onClick={() => setOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: 'Shipped' } : o))}
+                                onClick={() => quickStatusUpdate(order.id, 'out_for_delivery')}
                               >
-                                <Truck size={12} /> Mark Shipped
+                                <Truck size={12} /> Mark Out-For-Delivery
                               </button>
                             )}
-                            {(order.status === 'Shipped' || order.status === 'Processing') && (
+                            {(order.status === 'out_for_delivery' || order.status === 'processing') && (
                               <button
                                 className="ord-action-btn abtn-green"
-                                onClick={() => setOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: 'Delivered' } : o))}
+                                onClick={() => quickStatusUpdate(order.id, 'delivered')}
                               >
                                 <CheckCircle size={12} /> Mark Delivered
                               </button>
                             )}
-                            {order.status !== 'Cancelled' && order.status !== 'Delivered' && (
+                            {order.status !== 'cancelled' && order.status !== 'delivered' && (
                               <button
                                 className="ord-action-btn abtn-red"
                                 onClick={() => {
                                   if (window.confirm(`Cancel order ${order.orderNumber}?`)) {
-                                    setOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: 'Cancelled' } : o))
+                                    quickStatusUpdate(order.id, 'cancelled')
                                   }
                                 }}
                               >
@@ -749,7 +858,6 @@ export default function OrdersSection() {
                               </button>
                             )}
                           </div>
-
                         </div>
                       </motion.div>
                     )}

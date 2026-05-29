@@ -1,12 +1,15 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import {
   ShoppingCart, Package, Calendar, ArrowUp,
   Clock, Truck, CheckCircle, XCircle,
   PieChart, BarChart3, TrendingUp, ChevronRight,
-  DollarSign, CreditCard,
+  DollarSign, CreditCard, AlertCircle,
 } from 'lucide-react'
-import { sampleOrders } from '../data/orders'
+import axios from 'axios'
+import { supabase } from '../lib/supabaseClient'
+
+const API_BASE_URL = 'http://172.20.10.3:5000/api/users'
 
 /* ── helpers ── */
 const fmt = (n) => `GHC ${Number(n).toFixed(2)}`
@@ -25,11 +28,11 @@ const fmtDate = (d) => {
 }
 
 const STATUS_CFG = {
-  Pending:    { color: '#f59e0b', icon: Clock },
-  Processing: { color: '#60a5fa', icon: Package },
-  Shipped:    { color: '#c084fc', icon: Truck },
-  Delivered:  { color: '#4ade80', icon: CheckCircle },
-  Cancelled:  { color: '#f87171', icon: XCircle },
+  pending:    { color: '#f59e0b', icon: Clock, label: 'Pending' },
+  processing: { color: '#60a5fa', icon: Package, label: 'Processing' },
+  shipped:    { color: '#c084fc', icon: Truck, label: 'Shipped' },
+  delivered:  { color: '#4ade80', icon: CheckCircle, label: 'Delivered' },
+  cancelled:  { color: '#f87171', icon: XCircle, label: 'Cancelled' },
 }
 
 const staggerAnim = (i) => ({
@@ -39,24 +42,96 @@ const staggerAnim = (i) => ({
 })
 
 export default function DashboardSection() {
+  const [orders, setOrders] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
-  /* ── compute stats from sampleOrders ── */
+  // Fetch all orders for admin
+  const fetchOrders = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        setError('Please log in to view dashboard')
+        setLoading(false)
+        return
+      }
+
+      // Use admin endpoint to get ALL orders
+      const response = await axios.get(
+        `${API_BASE_URL}/admin/orders`,
+        {
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+          }
+        }
+      )
+      
+
+
+      if (response.data.orders && Array.isArray(response.data.orders)) {
+        // Transform API data to match component structure
+        const transformedOrders = response.data.orders.map(order => ({
+          id: order.id,
+          orderNumber: order.order_id,
+          orderDate: order.created_at,
+          customerName: order.customer_name,
+          customerPhone: order.customer_phone,
+          customerEmail: order.customer_email,
+          customerAddress: order.customer_address,
+          totalAmount: order.order_total,
+          status: order.status?.toLowerCase() || 'pending',
+          paymentMethod: order.payment_method,
+          orderDetails: order.items?.map(item => ({
+            id: item.product_id,
+            item: item.product_name,
+            quantity: item.quantity,
+            price: item.price,
+            subtotal: item.subtotal,
+            color: item.color,
+            image: item.image
+          })) || []
+        }))
+        setOrders(transformedOrders)
+      }
+    } catch (err) {
+      console.error("Error fetching orders:", err)
+      setError(err.response?.data?.error || "Failed to load dashboard data")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchOrders()
+  }, [])
+
+  /* ── compute stats from orders (excluding cancelled from revenue) ── */
   const stats = useMemo(() => {
-    const orders = sampleOrders
-    const total        = orders.length
-    const totalRevenue = orders.reduce((s, o) => s + o.totalAmount, 0)
-    const totalItems   = orders.reduce((s, o) => s + o.orderDetails.reduce((a, d) => a + d.quantity, 0), 0)
+    // Filter out cancelled orders for revenue calculation
+    const activeOrders = orders.filter(o => o.status !== 'cancelled')
+    const allOrders = orders
+    
+    const total        = allOrders.length
+    // ✅ Revenue excludes cancelled orders
+    const totalRevenue = activeOrders.reduce((s, o) => s + o.totalAmount, 0)
+    const totalItems   = allOrders.reduce((s, o) => s + o.orderDetails.reduce((a, d) => a + d.quantity, 0), 0)
     const avgOrder     = total > 0 ? totalRevenue / total : 0
 
+    // Get today's date in YYYY-MM-DD format
     const today = new Date().toISOString().slice(0, 10)
-    const todayOrders = orders.filter(o => o.orderDate === today).length
+    const todayOrders = allOrders.filter(o => {
+      const orderDate = new Date(o.orderDate).toISOString().slice(0, 10)
+      return orderDate === today
+    }).length
 
-    const statusCounts = orders.reduce((acc, o) => {
+    const statusCounts = allOrders.reduce((acc, o) => {
       acc[o.status] = (acc[o.status] || 0) + 1
       return acc
     }, {})
 
-    const recentOrders = [...orders]
+    const recentOrders = [...allOrders]
       .sort((a, b) => new Date(b.orderDate) - new Date(a.orderDate))
       .slice(0, 5)
 
@@ -64,7 +139,7 @@ export default function DashboardSection() {
       total, totalRevenue, totalItems, avgOrder,
       todayOrders, statusCounts, recentOrders,
     }
-  }, [])
+  }, [orders])
 
   const statCards = [
     {
@@ -73,7 +148,7 @@ export default function DashboardSection() {
       icon: DollarSign,
       change: `${stats.total} orders`,
       trend: 'up',
-      desc: 'Gross sales',
+      desc: 'Gross sales (excl. cancelled)',
     },
     {
       title: 'Total Orders',
@@ -101,17 +176,40 @@ export default function DashboardSection() {
     },
   ]
 
-  const statusRows = Object.entries(STATUS_CFG).map(([label, cfg]) => ({
-    label,
-    val:  stats.statusCounts[label] || 0,
-    pct:  stats.total > 0 ? ((stats.statusCounts[label] || 0) / stats.total) * 100 : 0,
+  const statusRows = Object.entries(STATUS_CFG).map(([key, cfg]) => ({
+    label: cfg.label,
+    key: key,
+    val:  stats.statusCounts[key] || 0,
+    pct:  stats.total > 0 ? ((stats.statusCounts[key] || 0) / stats.total) * 100 : 0,
     color: cfg.color,
     Icon:  cfg.icon,
   }))
 
-  const chipColor = (status) => {
-    const c = STATUS_CFG[status]
-    return c ? c.color : '#888'
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-96">
+        <div className="text-center">
+          <div className="w-10 h-10 border-2 border-gray-200 border-t-gray-600 rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-400 text-sm">Loading dashboard...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="ds-empty">
+        <div className="ds-empty-icon"><AlertCircle size={20} /></div>
+        <p className="ds-empty-title">Error loading dashboard</p>
+        <p className="ds-empty-sub">{error}</p>
+        <button 
+          onClick={fetchOrders}
+          className="mt-4 px-4 py-2 bg-gray-800 text-white rounded-lg text-sm"
+        >
+          Try Again
+        </button>
+      </div>
+    )
   }
 
   return (
@@ -143,7 +241,6 @@ export default function DashboardSection() {
         }
         @media(max-width:640px){ .ds { padding: 20px 16px 60px; } }
 
-        /* ── HEADER ── */
         .ds-header {
           display: flex; align-items: flex-start;
           justify-content: space-between; gap: 16px;
@@ -166,7 +263,6 @@ export default function DashboardSection() {
           align-self: flex-end;
         }
 
-        /* ── SECTION LABEL ── */
         .ds-label {
           font-family: 'DM Mono', monospace;
           font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase;
@@ -175,7 +271,6 @@ export default function DashboardSection() {
         }
         .ds-label::after { content: ''; flex: 1; height: 1px; background: var(--line); }
 
-        /* ── STAT CARDS ── */
         .ds-stats {
           display: grid; grid-template-columns: repeat(4, 1fr);
           gap: 12px; margin-bottom: 28px;
@@ -189,10 +284,6 @@ export default function DashboardSection() {
           transition: border-color .2s, transform .2s; position: relative; overflow: hidden;
         }
         .ds-stat:hover { border-color: var(--line2); transform: translateY(-2px); }
-        .ds-stat::before {
-          content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
-          background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent);
-        }
         .ds-stat-top {
           display: flex; align-items: center; justify-content: space-between;
           margin-bottom: 12px;
@@ -217,7 +308,6 @@ export default function DashboardSection() {
         .ds-stat-name { font-size: 12px; font-weight: 500; color: var(--muted); margin-bottom: 2px; }
         .ds-stat-desc { font-family: 'DM Mono', monospace; font-size: 9.5px; color: var(--faint); }
 
-        /* ── MID GRID ── */
         .ds-mid {
           display: grid; grid-template-columns: 1fr 300px;
           gap: 12px; margin-bottom: 28px;
@@ -237,7 +327,6 @@ export default function DashboardSection() {
         .ds-card-title svg { color: var(--muted); }
         .ds-card-sub { margin-left: auto; font-family: 'DM Mono', monospace; font-size: 9.5px; color: var(--faint); }
 
-        /* status distribution */
         .ds-status-grid {
           display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;
         }
@@ -264,7 +353,6 @@ export default function DashboardSection() {
         .ds-progress { height: 3px; background: var(--line); border-radius: 3px; margin-top: 7px; overflow: hidden; }
         .ds-progress-fill { height: 100%; border-radius: 3px; }
 
-        /* revenue summary */
         .ds-rev-item {
           background: var(--raised); border: 1px solid var(--line);
           border-radius: 10px; padding: 12px 14px;
@@ -284,7 +372,6 @@ export default function DashboardSection() {
           font-size: 15px; font-weight: 700; color: var(--white);
         }
 
-        /* ── RECENT ORDERS ── */
         .ds-orders-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; }
 
         .ds-view-all {
@@ -323,6 +410,23 @@ export default function DashboardSection() {
           font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 500;
           border: 1px solid;
         }
+
+        .ds-empty {
+          text-align: center; padding: 72px 20px;
+          background: var(--surface); border: 1px solid var(--line);
+          border-radius: 12px;
+        }
+        .ds-empty-icon {
+          width: 48px; height: 48px; border-radius: 12px;
+          background: var(--raised); border: 1px solid var(--line);
+          display: flex; align-items: center; justify-content: center;
+          margin: 0 auto 12px; color: var(--faint);
+        }
+        .ds-empty-title {
+          font-family: 'Playfair Display', serif;
+          font-size: 16px; font-weight: 700; color: var(--white); margin-bottom: 6px;
+        }
+        .ds-empty-sub { font-size: 12.5px; color: var(--muted); }
       `}</style>
 
       <div className="ds">
@@ -433,41 +537,47 @@ export default function DashboardSection() {
           <div className="ds-card-title">
             <ShoppingCart size={15} />
             Recent Orders
-            <button className="ds-view-all">View all <ChevronRight size={11} /></button>
           </div>
 
-          {stats.recentOrders.map((order) => {
-            const c = STATUS_CFG[order.status] || { color: '#888', icon: Clock }
-            const Icon = c.icon
-            return (
-              <div key={order.id} className="ds-order-row">
-                <div
-                  className="ds-order-icon-wrap"
-                  style={{ background: `${c.color}18`, color: c.color }}
-                >
-                  <Icon size={14} />
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="ds-order-num">{order.orderNumber}</div>
-                  <div className="ds-order-cust">{order.customerName}</div>
-                  <div className="ds-order-date">{fmtDate(order.orderDate)}</div>
-                </div>
-                <div className="ds-order-right">
-                  <div className="ds-order-amt">{fmt(order.totalAmount)}</div>
-                  <span
-                    className="ds-chip"
-                    style={{
-                      color: c.color,
-                      borderColor: `${c.color}44`,
-                      background: `${c.color}12`,
-                    }}
+          {stats.recentOrders.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-gray-400 text-sm">No orders found</p>
+            </div>
+          ) : (
+            stats.recentOrders.map((order) => {
+              const statusKey = order.status?.toLowerCase() || 'pending'
+              const c = STATUS_CFG[statusKey] || STATUS_CFG.pending
+              const Icon = c.icon
+              return (
+                <div key={order.id} className="ds-order-row">
+                  <div
+                    className="ds-order-icon-wrap"
+                    style={{ background: `${c.color}18`, color: c.color }}
                   >
-                    <Icon size={8} /> {order.status}
-                  </span>
+                    <Icon size={14} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="ds-order-num">{order.orderNumber}</div>
+                    <div className="ds-order-cust">{order.customerName}</div>
+                    <div className="ds-order-date">{fmtDate(order.orderDate)}</div>
+                  </div>
+                  <div className="ds-order-right">
+                    <div className="ds-order-amt">{fmt(order.totalAmount)}</div>
+                    <span
+                      className="ds-chip"
+                      style={{
+                        color: c.color,
+                        borderColor: `${c.color}44`,
+                        background: `${c.color}12`,
+                      }}
+                    >
+                      <Icon size={8} /> {c.label}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            )
-          })}
+              )
+            })
+          )}
         </motion.div>
 
       </div>

@@ -25,7 +25,7 @@ const App = () => {
 
   return (
     <>
-    <AppContext>
+  
     <div className="flex items-center justify-center min-h-screen bg-[#0e0e0e]">
       <Routes>
         <Route path="/admin-panel" element={
@@ -36,7 +36,7 @@ const App = () => {
         
       </Routes>
     </div>
-    </AppContext>
+  
     <ToastContainer />
     </>
   )
