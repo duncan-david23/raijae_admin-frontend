@@ -26,7 +26,7 @@ const AdminLogin = () => {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
-      const response = await axios.get('http://172.20.10.3:5000/api/users/profile/check-role', {
+      const response = await axios.get('https://raijae-backend.onrender.com/api/users/profile/check-role', {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'

@@ -45,7 +45,7 @@ export default function PlainProductsSection() {
       
       const headers = token ? { Authorization: `Bearer ${token}` } : {}
       
-      const response = await axios.get('http://172.20.10.3:5000/api/users/products', { headers })
+      const response = await axios.get('https://raijae-backend.onrender.com/api/users/products', { headers })
       
       // Map the API response to match your component's expected structure
       const mappedProducts = response.data.products.map(product => ({
@@ -125,7 +125,7 @@ export default function PlainProductsSection() {
       const { data: { session } } = await supabase.auth.getSession()
       const token = session?.access_token
 
-      await axios.delete(`http://172.20.10.3:5000/api/users/products/product/${id}`, {
+      await axios.delete(`https://raijae-backend.onrender.com/api/users/products/product/${id}`, {
         headers: { Authorization: `Bearer ${token}` }
       })
       
@@ -146,7 +146,7 @@ export default function PlainProductsSection() {
       const token = session?.access_token
       
       for (const id of selected) {
-        await axios.delete(`http://172.20.10.3:5000/api/users/products/product/${id}`, {
+        await axios.delete(`https://raijae-backend.onrender.com/api/users/products/product/${id}`, {
           headers: { Authorization: `Bearer ${token}` }
         })
       }
@@ -179,7 +179,7 @@ export default function PlainProductsSection() {
       formData.append('product_colors', JSON.stringify(updatedData.colors || []))
       formData.append('existing_images', JSON.stringify(updatedData.images || []))
       
-      await axios.put(`http://172.20.10.3:5000/api/products/product/${id}`, formData, {
+      await axios.put(`https://raijae-backend.onrender.com/api/products/product/${id}`, formData, {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'multipart/form-data' }
       })
       

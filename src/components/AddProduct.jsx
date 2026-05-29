@@ -192,7 +192,7 @@ export default function AddProduct({ selectedProduct, onClose, onSuccess }) {
     let response;
     if (selectedProduct) {
       response = await axios.put(
-        `http://172.20.10.3:5000/api/users/products/product/${selectedProduct.id}`,
+        `https://raijae-backend.onrender.com/api/users/products/product/${selectedProduct.id}`,
         formData,
         {
           headers: {
@@ -203,7 +203,7 @@ export default function AddProduct({ selectedProduct, onClose, onSuccess }) {
       );
     } else {
       response = await axios.post(
-        'http://172.20.10.3:5000/api/users/products/add-product',
+        'https://raijae-backend.onrender.com/api/users/products/add-product',
         formData,
         {
           headers: {
